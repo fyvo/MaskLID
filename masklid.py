@@ -112,31 +112,31 @@ class MaskLID:
         return dict_text
 
     def mask_label_top_k(self, dict_text, label, top_keep, top_remove):
-        """Mask top predictions for a given label.
+        """Mask or Assign top predictions for a given label.
         
         Args:
             dict_text (dict): Dictionary containing language vectors for each word.
             label (str): Label to mask.
-            top_keep (int): Number of top predictions to keep.
-            top_remove (int): Number of top predictions to remove.
+            top_keep (int): Condition for **assignment** of a word - label in the top_keep for that word.
+            top_remove (int): Condition for **masking** of a word - label in the top_remove for that word.
             
         Returns:
-            tuple: Dictionaries of remaining and deleted words after masking.
+            tuple: Dictionaries of remaining and assigned words after masking.
         """
         dict_remained = deepcopy(dict_text)
-        dict_deleted = {}
+        dict_assigned = {}
 
         for key, value in dict_text.items():
             logits = value['logits']
             labels = [t[0] for t in logits]
 
             if label in labels[:top_keep]:
-                dict_deleted[key] = dict_remained[key]
+                dict_assigned[key] = dict_remained[key]
 
             if label in labels[:top_remove]:
                 dict_remained.pop(key, None)
 
-        return dict_remained, dict_deleted
+        return dict_remained, dict_assigned
 
     @staticmethod
     def get_sizeof(text):
@@ -216,23 +216,28 @@ class MaskLID:
             # save the current text in case of step back
             prev_text = text
             # mask
-            dict_data, dict_masked = self.mask_label_top_k(dict_data, label, beta, alpha)
+            dict_data, dict_assigned = self.mask_label_top_k(dict_data, label, beta, alpha)
 
             # get the text from the masked text and remained text
-            masked_text = ' '.join(x.split('_', 1)[1] for x in dict_masked.keys())
             text = ' '.join(x.split('_', 1)[1] for x in dict_data.keys())
+            assigned_text = ' '.join(x.split('_', 1)[1] for x in dict_assigned.keys())
             
-            # save info
-            if self.get_sizeof(masked_text) > min_length or index == 0:
-                temp_pred = self.predict(masked_text)
+            
+            # print("text=", prev_text, "label=", label, "(new text), dict data=", text, "dict_mask=", assigned_text, index, retry)
+
+            # save language info, with a sanity check:
+            # just looking at the assigned words should ensure a probability of min_prob (assuming text is long enough)
+            # if not, we increase alpha and beta (beta should be enough to assign more words; changing alpha does not change this assignment) and retry
+            if self.get_sizeof(assigned_text) > min_length or index == 0:
+                temp_pred = self.predict(assigned_text)
 
                 if (temp_pred[1][0] > min_prob and temp_pred[0][0] == label) or index == 0:
                     info[index] = {
                         'label': label,
-                        'text': masked_text,
-                        'text_keys': dict_masked.keys(),
-                        'size': self.get_sizeof(masked_text),
-                        'sum_logit': self.sum_logits(dict_masked, label)
+                        'text': assigned_text,
+                        'text_keys': dict_assigned.keys(),
+                        'size': self.get_sizeof(assigned_text),
+                        'sum_logit': self.sum_logits(dict_assigned, label)
                     }
                     index += 1
                 else:
